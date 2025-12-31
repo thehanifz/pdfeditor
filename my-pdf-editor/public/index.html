@@ -1,0 +1,821 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Editor Simple</title>
+    <style>
+        body { background: #f0f2f5; font-family: sans-serif; margin: 0; display: flex; flex-direction: column; align-items: center; padding-top: 80px; }
+
+        /* HEADER */
+        .header { position: fixed; top: 0; left: 0; width: 100%; height: 60px; background: white; box-shadow: 0 2px 5px rgba(0,0,0,0.1); z-index: 1000; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; box-sizing: border-box; }
+        .btn-group { display: flex; gap: 10px; }
+        button, .btn-upload { padding: 8px 12px; cursor: pointer; border: 1px solid #ccc; background: white; border-radius: 4px; font-size: 14px; }
+        button:hover { background: #eee; }
+        .btn-primary { background: #007bff; color: white; border: none; }
+        .btn-primary:hover { background: #0056b3; }
+
+        /* WORKSPACE */
+        #workspace { position: relative; margin: 20px; border: 1px solid #999; box-shadow: 0 5px 15px rgba(0,0,0,0.3); background: white; min-width: 500px; min-height: 700px; }
+
+        /* DRAG & DROP */
+        #workspace.drop-zone { border: 3px dashed #007bff; background-color: rgba(0, 123, 255, 0.1); }
+
+        /* LOADING */
+        #loading { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(255,255,255,0.9); z-index: 2000; justify-content: center; align-items: center; font-weight: bold; font-size: 20px; color: #333; }
+
+        /* PROPERTY BAR */
+        #propBar { display: none; position: fixed; top: 65px; background: #333; color: white; padding: 10px; border-radius: 5px; gap: 10px; z-index: 999; flex-wrap: wrap; }
+        #propBar label { font-size: 12px; margin-right: 5px; }
+        input[type=number] { width: 50px; }
+        select { padding: 5px; border-radius: 4px; }
+    </style>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+</head>
+<body>
+
+<div id="loading">⏳ Sedang Memproses...</div>
+
+<div class="header">
+    <div style="font-weight: bold;">PDF EDITOR</div>
+    <div class="btn-group">
+        <label class="btn-upload" style="background: #28a745; color: white; border:none;">
+            📂 Upload PDF
+            <input type="file" id="inpFile" accept="application/pdf" hidden>
+        </label>
+        <button onclick="addText()">📝 Text</button>
+        <button onclick="addWhiteout()">⬜ Hapus (Whiteout)</button>
+        <button id="signButton" class="btn-upload" style="background: #ffc107; color: white; border:none;">
+            ✍️ Tanda Tangan
+        </button>
+        <input type="file" id="inpSign" accept="image/*" hidden>
+    </div>
+    <button class="btn-primary" onclick="savePDF()">💾 DOWNLOAD</button>
+</div>
+
+<!-- Modal for saved signatures -->
+<div id="signatureModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 2000; justify-content: center; align-items: center;">
+    <div style="background: white; padding: 20px; border-radius: 10px; width: 80%; max-width: 500px; max-height: 80vh; overflow-y: auto;">
+        <h3>Saved Signatures</h3>
+        <div id="signatureList" style="display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 15px;"></div>
+        <div style="display: flex; gap: 10px; margin-top: 15px;">
+            <button onclick="addNewSignature()" style="padding: 10px 20px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer; flex: 1;">+ Add New Signature</button>
+            <button onclick="closeSignatureModal()" style="padding: 10px 20px; background: #6c757d; color: white; border: none; border-radius: 4px; cursor: pointer; flex: 1;">Close</button>
+        </div>
+    </div>
+</div>
+
+<div id="propBar">
+    <label for="pColor">Color:</label>
+    <input type="color" id="pColor" onchange="updateObj()">
+    <label for="pSize">Size:</label>
+    <input type="number" id="pSize" value="20" onchange="updateObj()">
+    <label for="pFont">Font:</label>
+    <select id="pFont" onchange="updateObj()">
+        <option value="Helvetica">Helvetica</option>
+        <option value="Times">Times</option>
+        <option value="Courier">Courier</option>
+    </select>
+    <label for="pStyle">Style:</label>
+    <select id="pStyle" onchange="updateObj()">
+        <option value="normal">Normal</option>
+        <option value="bold">Bold</option>
+        <option value="italic">Italic</option>
+        <option value="bold italic">Bold Italic</option>
+    </select>
+    <button onclick="deleteObj()" style="background: red; color: white; border:none;">Hapus</button>
+</div>
+
+<div id="workspace">
+    <canvas id="pdfCanvas"></canvas>
+    </div>
+
+<script>
+    // SETUP PDF.JS WORKER (Wajib Versi Sama)
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+    let pdfDoc = null;
+    let fabricCanvas = null;
+    let currentFilename = '';
+    const SCALE = 1.5;
+    let currentPageScale = 1; // Store the actual scale factor for this page
+
+    // DRAG & DROP FUNCTIONALITY
+    const workspace = document.getElementById('workspace');
+
+    workspace.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        workspace.classList.add('drop-zone');
+    });
+
+    workspace.addEventListener('dragleave', (e) => {
+        e.preventDefault();
+        workspace.classList.remove('drop-zone');
+    });
+
+    workspace.addEventListener('drop', (e) => {
+        e.preventDefault();
+        workspace.classList.remove('drop-zone');
+
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+            const file = files[0];
+            if (file.type === 'application/pdf') {
+                // Simulate file input change event
+                const event = new Event('change', { bubbles: true });
+                document.getElementById('inpFile').files = files;
+                document.getElementById('inpFile').dispatchEvent(event);
+            } else {
+                alert('Please drop a PDF file');
+            }
+        }
+    });
+
+    // 1. UPLOAD PDF
+    document.getElementById('inpFile').addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        showLoading(true);
+        const formData = new FormData();
+        formData.append('pdf', file);
+
+        try {
+            // Upload
+            const res = await fetch('/upload', { method: 'POST', body: formData });
+            if (!res.ok) {
+                throw new Error(`Upload failed: ${res.status} ${res.statusText}`);
+            }
+            const data = await res.json();
+            currentFilename = data.filename;
+
+            // Load PDF dari URL server (bukan blob local, biar lebih stabil)
+            const loadingTask = pdfjsLib.getDocument(data.url);
+            pdfDoc = await loadingTask.promise;
+
+            // Only render after successfully loading the PDF
+            if (pdfDoc.numPages > 0) {
+                await renderPage(1);
+                // Restore any auto-saved changes for this file
+                restoreAutoSave();
+            } else {
+                alert("PDF has no pages to display");
+            }
+        } catch (err) {
+            alert("Gagal load PDF: " + err.message);
+            console.error(err);
+        } finally {
+            showLoading(false);
+        }
+    });
+
+    async function renderPage(num) {
+        try {
+            const page = await pdfDoc.getPage(num);
+            const originalViewport = page.getViewport({ scale: 1 }); // Get original size
+            const scaledViewport = page.getViewport({ scale: SCALE }); // Get scaled size for display
+
+            // Set up PDF canvas with scaled dimensions
+            const pdfCanvas = document.getElementById('pdfCanvas');
+            const ctx = pdfCanvas.getContext('2d');
+            pdfCanvas.width = scaledViewport.width;
+            pdfCanvas.height = scaledViewport.height;
+
+            // Clear canvas first
+            ctx.clearRect(0, 0, pdfCanvas.width, pdfCanvas.height);
+
+            // Render PDF to canvas at scaled size
+            const renderContext = {
+                canvasContext: ctx,
+                viewport: scaledViewport
+            };
+            await page.render(renderContext).promise;
+
+            // Set up Fabric.js canvas - also at scaled size to match display
+            const workspace = document.getElementById('workspace');
+            workspace.style.width = scaledViewport.width + 'px';
+            workspace.style.height = scaledViewport.height + 'px';
+
+            // Remove any existing Fabric canvas
+            const oldFabric = document.querySelector('.canvas-container');
+            if (oldFabric) oldFabric.remove();
+
+            // Create new Fabric canvas element at scaled size
+            const fCanvasEl = document.createElement('canvas');
+            fCanvasEl.id = 'fabricCanvas';
+            fCanvasEl.width = scaledViewport.width;
+            fCanvasEl.height = scaledViewport.height;
+            workspace.appendChild(fCanvasEl);
+
+            // Initialize Fabric.js at scaled canvas
+            fabricCanvas = new fabric.Canvas('fabricCanvas');
+
+            // Calculate the actual scale factor for coordinate conversion
+            currentPageScale = SCALE; // This is the scale factor used
+
+            // Position Fabric canvas properly
+            const container = document.querySelector('.canvas-container');
+            if (container) {
+                container.style.position = 'absolute';
+                container.style.top = '0';
+                container.style.left = '0';
+                container.style.pointerEvents = 'auto'; // Make sure it's interactive
+            }
+
+            // Set up event listeners
+            fabricCanvas.on('selection:created', showProp);
+            fabricCanvas.on('selection:updated', showProp);
+            fabricCanvas.on('selection:cleared', hideProp);
+
+            // Auto-save on object modifications
+            fabricCanvas.on('object:added', function() {
+                setTimeout(autoSave, 1000); // Delay to avoid saving too frequently
+            });
+            fabricCanvas.on('object:modified', function() {
+                setTimeout(autoSave, 1000);
+            });
+            fabricCanvas.on('object:removed', function() {
+                setTimeout(autoSave, 1000);
+            });
+
+        } catch (error) {
+            console.error("Error rendering page:", error);
+            alert("Failed to render PDF page: " + error.message);
+        }
+    }
+
+    // 2. LOGIKA TANDA TANGAN (UNIFIED SIGNATURE BUTTON)
+    document.getElementById('signButton').addEventListener('click', async function() {
+        // First, check if there are existing signatures
+        try {
+            const res = await fetch('/signatures');
+            const signatures = await res.json();
+
+            if (signatures.length > 0) {
+                // Show signature library if signatures exist
+                showSavedSignatures();
+            } else {
+                // If no signatures exist, trigger file selection for new signature
+                document.getElementById('inpSign').click();
+            }
+        } catch (err) {
+            console.error('Error checking signatures:', err);
+            // If there's an error checking signatures, just proceed with file selection
+            document.getElementById('inpSign').click();
+        }
+    });
+
+    // Handle the actual file upload when a new signature is selected
+    document.getElementById('inpSign').addEventListener('change', async function(e) {
+        const file = e.target.files[0];
+        if(!file) return;
+
+        showLoading(true);
+
+        // Check file type first
+        if (!file.type.startsWith('image/')) {
+            alert('Please select an image file for signature');
+            showLoading(false);
+            return;
+        }
+
+        try {
+            // Upload the signature to server for storage
+            const formData = new FormData();
+            formData.append('signature', file);
+
+            const res = await fetch('/upload-sign', { method: 'POST', body: formData });
+            if (!res.ok) {
+                throw new Error(`Signature upload failed: ${res.status} ${res.statusText}`);
+            }
+            const data = await res.json();
+
+            // Process the uploaded signature for immediate use
+            const reader = new FileReader();
+            reader.onload = function(evt) {
+                const imgObj = new Image();
+                imgObj.onload = function() {
+                    try {
+                        // Check image dimensions
+                        if (imgObj.width > 2000 || imgObj.height > 2000) {
+                            alert('Image too large, please select a smaller signature image');
+                            showLoading(false);
+                            return;
+                        }
+
+                        // Remove background and add to canvas
+                        const cleanData = removeWhitePixels(imgObj);
+
+                        fabric.Image.fromURL(cleanData, function(img) {
+                            if (img) {
+                                img.scaleToWidth(200);
+                                fabricCanvas.add(img);
+                                fabricCanvas.setActiveObject(img);
+                            } else {
+                                alert('Failed to process signature image');
+                            }
+                            showLoading(false);
+                        }, {
+                            // Add error callback
+                            onError: function() {
+                                alert('Failed to load signature image');
+                                showLoading(false);
+                            }
+                        });
+                    } catch (error) {
+                        console.error("Error processing signature:", error);
+                        alert("Error processing signature: " + error.message);
+                        showLoading(false);
+                    }
+                };
+
+                imgObj.onerror = function() {
+                    alert('Failed to load signature image');
+                    showLoading(false);
+                };
+
+                imgObj.src = evt.target.result;
+            };
+
+            reader.onerror = function() {
+                alert('Error reading signature file');
+                showLoading(false);
+            };
+
+            reader.readAsDataURL(file);
+
+        } catch (err) {
+            alert("Gagal upload signature: " + err.message);
+            console.error(err);
+            showLoading(false);
+        }
+    });
+
+    // FUNGSI AJAIB: Menghapus pixel putih
+    function removeWhitePixels(imgObj) {
+        try {
+            const tempCanvas = document.createElement('canvas');
+            const ctx = tempCanvas.getContext('2d');
+            tempCanvas.width = imgObj.width;
+            tempCanvas.height = imgObj.height;
+
+            ctx.drawImage(imgObj, 0, 0);
+            const imgData = ctx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+            const data = imgData.data;
+
+            // Loop through each pixel
+            for (let i = 0; i < data.length; i += 4) {
+                const r = data[i];
+                const g = data[i + 1];
+                const b = data[i + 2];
+                const a = data[i + 3];
+
+                // More sophisticated check for "white-like" pixels
+                // Consider pixels that are mostly white (RGB values > 220) and not already transparent
+                if (r > 220 && g > 220 && b > 220 && a !== 0) {
+                    data[i + 3] = 0; // Set alpha to 0 (transparent)
+                }
+            }
+
+            ctx.putImageData(imgData, 0, 0);
+            return tempCanvas.toDataURL('image/png');
+        } catch (error) {
+            console.error("Error in removeWhitePixels:", error);
+            // Return original image as fallback
+            return imgObj.src;
+        }
+    }
+
+    // 3. TOOLS LAIN
+    function addText() {
+        if(!fabricCanvas) return alert("Upload PDF dulu!");
+        const text = new fabric.IText('Ketik Disini', {
+            left: 50,
+            top: 50,
+            fontSize: 12,
+            fontFamily: 'Helvetica',
+            fill: '#000000'
+        });
+        fabricCanvas.add(text);
+        fabricCanvas.setActiveObject(text);
+    }
+
+    function addWhiteout() {
+        if(!fabricCanvas) return alert("Upload PDF dulu!");
+        const rect = new fabric.Rect({ left: 50, top: 50, width: 100, height: 30, fill: 'white', strokeWidth: 0 });
+        fabricCanvas.add(rect);
+        fabricCanvas.setActiveObject(rect);
+    }
+
+    // 4. SAVE SYSTEM
+    async function savePDF() {
+        if(!currentFilename) return;
+        showLoading(true);
+
+        // Ambil semua objek dan konversi koordinat dari skala canvas ke ukuran asli PDF
+        const objects = fabricCanvas.getObjects().map(obj => {
+            let type = '';
+            if (obj.type === 'i-text') type = 'text';
+            else if (obj.type === 'rect') {
+                // More accurate whiteout detection - check if fill is white
+                if (obj.fill === '#ffffff' || obj.fill === 'white' ||
+                    (typeof obj.fill === 'object' && obj.fill.r === 1 && obj.fill.g === 1 && obj.fill.b === 1)) {
+                    type = 'whiteout';
+                } else {
+                    // Other colored rectangles are not whiteouts
+                    type = 'rect';
+                }
+            }
+            else if (obj.type === 'image') type = 'image';
+
+            // Convert coordinates from scaled canvas to original PDF size
+            // (x, y, width, height need to be scaled down)
+            // But font size is an absolute measurement and should remain as is
+            // Note: Default origin for all objects including IText and Rect is top-left
+            let originalX = obj.left / currentPageScale;
+            let originalY = obj.top / currentPageScale;
+            let originalWidth = (obj.width * obj.scaleX) / currentPageScale;
+            let originalHeight = (obj.height * obj.scaleY) / currentPageScale;
+
+            // Special handling for text to fix positioning
+            if (obj.type === 'i-text') {
+                // Text objects might have different origin point, adjust coordinates accordingly
+                originalX = (obj.left - obj.width/2) / currentPageScale;
+                originalY = (obj.top - obj.height/2) / currentPageScale;
+            }
+
+            return {
+                type: type,
+                x: originalX,
+                y: originalY,
+                width: originalWidth,
+                height: originalHeight,
+                text: obj.text,
+                fontSize: obj.fontSize,  // Font size is independent of canvas scale
+                fill: obj.fill,
+                fontFamily: obj.fontFamily,
+                isBold: obj.fontWeight === 'bold',
+                isItalic: obj.fontStyle === 'italic',
+                dataUrl: (type === 'image') ? obj.toDataURL() : null
+            };
+        });
+
+        try {
+            const res = await fetch('/save', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ filename: currentFilename, actions: objects })
+            });
+            const data = await res.json();
+
+            if(data.url) {
+                // Get original filename without the timestamp prefix
+                const originalFilename = currentFilename.split('-').slice(1).join('-'); // Remove timestamp
+                const cleanOriginalName = originalFilename.replace('.pdf', '');
+
+                // Trigger Download
+                const a = document.createElement('a');
+                a.href = data.url; // Relative path ke public folder
+                a.download = `Edited_${cleanOriginalName}.pdf`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+
+                // Delete the edited file after successful download
+                setTimeout(() => {
+                    fetch(`/delete/${data.url.split('/').pop()}`, { method: 'DELETE' })
+                        .then(response => {
+                            if(response.ok) {
+                                console.log('Edited file deleted successfully');
+                            } else {
+                                console.error('Failed to delete edited file');
+                            }
+                        })
+                        .catch(err => console.error('Error deleting edited file:', err));
+                }, 1000); // Delay deletion to ensure download has started
+            } else {
+                alert("Gagal menyimpan");
+            }
+        } catch (e) {
+            alert("Error: " + e.message);
+        } finally {
+            showLoading(false);
+        }
+    }
+
+    // HELPER UI
+    function showLoading(show) { document.getElementById('loading').style.display = show ? 'flex' : 'none'; }
+    function showProp() {
+        const obj = fabricCanvas.getActiveObject();
+        if(obj) {
+            // Show different options based on object type
+            if(obj.type === 'i-text') {
+                // Show all text options for text
+                document.getElementById('pColor').style.display = 'inline';
+                document.getElementById('pSize').style.display = 'inline';
+                document.getElementById('pFont').style.display = 'inline';
+                document.getElementById('pStyle').style.display = 'inline';
+
+                // Show labels for text options
+                document.querySelector('#propBar label[for="pColor"]').style.display = 'inline';
+                document.querySelector('#propBar label[for="pSize"]').style.display = 'inline';
+                document.querySelector('#propBar label[for="pFont"]').style.display = 'inline';
+                document.querySelector('#propBar label[for="pStyle"]').style.display = 'inline';
+
+                // Update the current values in the controls
+                document.getElementById('pColor').value = obj.fill;
+                document.getElementById('pSize').value = obj.fontSize;
+                document.getElementById('pFont').value = obj.fontFamily || 'Helvetica';
+
+                // Determine current style (bold and/or italic)
+                let styleValue = 'normal';
+                if (obj.fontWeight === 'bold' && obj.fontStyle === 'italic') {
+                    styleValue = 'bold italic';
+                } else if (obj.fontWeight === 'bold') {
+                    styleValue = 'bold';
+                } else if (obj.fontStyle === 'italic') {
+                    styleValue = 'italic';
+                }
+                document.getElementById('pStyle').value = styleValue;
+            } else if(obj.type === 'rect') {
+                // Only show color option for rectangles (whiteout)
+                document.getElementById('pColor').style.display = 'inline';
+                document.getElementById('pSize').style.display = 'none'; // hide size for rect
+                document.getElementById('pFont').style.display = 'none';
+                document.getElementById('pStyle').style.display = 'none';
+
+                // Show/hide labels accordingly
+                document.querySelector('#propBar label[for="pColor"]').style.display = 'inline';
+                document.querySelector('#propBar label[for="pSize"]').style.display = 'none';
+                document.querySelector('#propBar label[for="pFont"]').style.display = 'none';
+                document.querySelector('#propBar label[for="pStyle"]').style.display = 'none';
+
+                // Update color value
+                document.getElementById('pColor').value = obj.fill;
+            } else if(obj.type === 'image') {
+                // Hide all options for images
+                document.getElementById('pColor').style.display = 'none';
+                document.getElementById('pSize').style.display = 'none';
+                document.getElementById('pFont').style.display = 'none';
+                document.getElementById('pStyle').style.display = 'none';
+
+                document.querySelector('#propBar label[for="pColor"]').style.display = 'none';
+                document.querySelector('#propBar label[for="pSize"]').style.display = 'none';
+                document.querySelector('#propBar label[for="pFont"]').style.display = 'none';
+                document.querySelector('#propBar label[for="pStyle"]').style.display = 'none';
+            }
+            document.getElementById('propBar').style.display = 'flex';
+        }
+    }
+    function hideProp() { document.getElementById('propBar').style.display = 'none'; }
+
+    function updateObj() {
+        const obj = fabricCanvas.getActiveObject();
+        if(obj) {
+            if(obj.type === 'i-text') {
+                // Update text properties
+                obj.set('fill', document.getElementById('pColor').value);
+                obj.set('fontSize', parseInt(document.getElementById('pSize').value));
+                obj.set('fontFamily', document.getElementById('pFont').value);
+
+                // Apply font style (bold/italic)
+                const fontStyle = document.getElementById('pStyle').value;
+                if (fontStyle === 'bold') {
+                    obj.set('fontWeight', 'bold');
+                    obj.set('fontStyle', 'normal');
+                } else if (fontStyle === 'italic') {
+                    obj.set('fontStyle', 'italic');
+                    obj.set('fontWeight', 'normal');
+                } else if (fontStyle === 'bold italic') {
+                    obj.set('fontWeight', 'bold');
+                    obj.set('fontStyle', 'italic');
+                } else {
+                    obj.set('fontWeight', 'normal');
+                    obj.set('fontStyle', 'normal');
+                }
+            } else if(obj.type === 'rect') {
+                // Update rectangle color
+                obj.set('fill', document.getElementById('pColor').value);
+            }
+            fabricCanvas.renderAll();
+        }
+    }
+    function deleteObj() {
+        const obj = fabricCanvas.getActiveObject();
+        if(obj) fabricCanvas.remove(obj);
+        hideProp();
+    }
+
+    // Signature Library Functions
+    async function showSavedSignatures() {
+        // Show the modal first
+        document.getElementById('signatureModal').style.display = 'flex';
+
+        const signatureList = document.getElementById('signatureList');
+        signatureList.innerHTML = '<p>Loading signatures...</p>';
+
+        try {
+            const res = await fetch('/signatures');
+            const signatures = await res.json();
+
+            if (signatures.length === 0) {
+                signatureList.innerHTML = '<p>No saved signatures</p>';
+                // Add the new signature button below the message
+                const addBtnContainer = document.createElement('div');
+                addBtnContainer.style.textAlign = 'center';
+                addBtnContainer.style.marginTop = '15px';
+
+                const addBtn = document.createElement('button');
+                addBtn.textContent = '+ Add New Signature';
+                addBtn.style.padding = '10px 20px';
+                addBtn.style.background = '#28a745';
+                addBtn.style.color = 'white';
+                addBtn.style.border = 'none';
+                addBtn.style.borderRadius = '4px';
+                addBtn.style.cursor = 'pointer';
+                addBtn.onclick = function() {
+                    addNewSignature();
+                };
+
+                addBtnContainer.appendChild(addBtn);
+                signatureList.appendChild(addBtnContainer);
+                return;
+            }
+
+            signatureList.innerHTML = '';
+
+            for (const signature of signatures) {
+                const imgContainer = document.createElement('div');
+                imgContainer.style.position = 'relative';
+                imgContainer.style.display = 'inline-block';
+                imgContainer.style.margin = '5px';
+
+                const img = document.createElement('img');
+                img.src = signature.url;
+                img.style.width = '100px';
+                img.style.height = 'auto';
+                img.style.cursor = 'pointer';
+                img.title = 'Click to add to canvas';
+                img.onclick = function() {
+                    if(fabricCanvas) {
+                        fabric.Image.fromURL(signature.url, function(img) {
+                            if (img) {
+                                img.scaleToWidth(200);
+                                fabricCanvas.add(img);
+                                fabricCanvas.setActiveObject(img);
+                            }
+                            closeSignatureModal();
+                        });
+                    }
+                };
+
+                const deleteBtn = document.createElement('button');
+                deleteBtn.textContent = '×';
+                deleteBtn.style.position = 'absolute';
+                deleteBtn.style.top = '0';
+                deleteBtn.style.right = '0';
+                deleteBtn.style.background = 'red';
+                deleteBtn.style.color = 'white';
+                deleteBtn.style.border = 'none';
+                deleteBtn.style.borderRadius = '50%';
+                deleteBtn.style.width = '20px';
+                deleteBtn.style.height = '20px';
+                deleteBtn.style.cursor = 'pointer';
+                deleteBtn.onclick = function(e) {
+                    e.stopPropagation();
+                    if (confirm('Are you sure you want to delete this signature?')) {
+                        // Delete from server
+                        fetch('/sign/' + signature.filename, { method: 'DELETE' })
+                            .then(response => {
+                                if (response.ok) {
+                                    showSavedSignatures(); // Refresh the list
+                                } else {
+                                    alert('Failed to delete signature');
+                                }
+                            })
+                            .catch(err => {
+                                console.error('Error deleting signature:', err);
+                                alert('Error deleting signature');
+                            });
+                    }
+                };
+
+                imgContainer.appendChild(img);
+                imgContainer.appendChild(deleteBtn);
+                signatureList.appendChild(imgContainer);
+            }
+        } catch (err) {
+            console.error('Error loading signatures:', err);
+            signatureList.innerHTML = '<p>Error loading signatures</p>';
+        }
+    }
+
+    function closeSignatureModal() {
+        document.getElementById('signatureModal').style.display = 'none';
+    }
+
+    function addNewSignature() {
+        // Close the modal and trigger file selection for a new signature
+        closeSignatureModal();
+        document.getElementById('inpSign').click();
+    }
+
+    // Auto-save functionality
+    function autoSave() {
+        if (!currentFilename || !fabricCanvas) return;
+
+        // Save the current canvas state to browser storage
+        const objects = fabricCanvas.getObjects().map(obj => {
+            let type = '';
+            if (obj.type === 'i-text') type = 'text';
+            else if (obj.type === 'rect') {
+                if (obj.fill === '#ffffff' || obj.fill === 'white' ||
+                    (typeof obj.fill === 'object' && obj.fill.r === 1 && obj.fill.g === 1 && obj.fill.b === 1)) {
+                    type = 'whiteout';
+                } else {
+                    type = 'rect';
+                }
+            }
+            else if (obj.type === 'image') type = 'image';
+
+            return {
+                type: type,
+                x: obj.left,
+                y: obj.top,
+                width: obj.width * obj.scaleX,
+                height: obj.height * obj.scaleY,
+                text: obj.text,
+                fontSize: obj.fontSize,
+                fill: obj.fill,
+                fontFamily: obj.fontFamily,
+                isBold: obj.fontWeight === 'bold',
+                isItalic: obj.fontStyle === 'italic',
+                dataUrl: (type === 'image') ? obj.toDataURL() : null
+            };
+        });
+
+        // Store auto-save data for this file
+        localStorage.setItem(`autosave_${currentFilename}`, JSON.stringify(objects));
+        console.log('Auto-saved changes for file:', currentFilename);
+    }
+
+    // Restore auto-saved data when opening a file
+    function restoreAutoSave() {
+        if (!currentFilename) return;
+
+        const savedData = localStorage.getItem(`autosave_${currentFilename}`);
+        if (savedData) {
+            try {
+                const objects = JSON.parse(savedData);
+                // Clear canvas first
+                fabricCanvas.clear();
+
+                // Add saved objects back to canvas
+                objects.forEach(obj => {
+                    if (obj.type === 'text') {
+                        const text = new fabric.IText(obj.text, {
+                            left: obj.x,
+                            top: obj.y,
+                            fontSize: obj.fontSize,
+                            fontFamily: obj.fontFamily,
+                            fill: obj.fill,
+                            fontWeight: obj.isBold ? 'bold' : 'normal',
+                            fontStyle: obj.isItalic ? 'italic' : 'normal'
+                        });
+                        fabricCanvas.add(text);
+                    } else if (obj.type === 'whiteout') {
+                        const rect = new fabric.Rect({
+                            left: obj.x,
+                            top: obj.y,
+                            width: obj.width,
+                            height: obj.height,
+                            fill: 'white',
+                            strokeWidth: 0
+                        });
+                        fabricCanvas.add(rect);
+                    } else if (obj.type === 'image' && obj.dataUrl) {
+                        fabric.Image.fromURL(obj.dataUrl, function(img) {
+                            if (img) {
+                                img.set({
+                                    left: obj.x,
+                                    top: obj.y,
+                                    width: obj.width,
+                                    height: obj.height
+                                });
+                                fabricCanvas.add(img);
+                                fabricCanvas.renderAll();
+                            }
+                        });
+                    }
+                });
+                console.log('Restored auto-saved changes for file:', currentFilename);
+            } catch (e) {
+                console.error('Error restoring auto-save:', e);
+            }
+        }
+    }
+</script>
+</body>
+</html>
