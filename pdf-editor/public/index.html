@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Editor Pro (Final Fix)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style> 
+        body { font-family: 'Inter', sans-serif; } 
+        ::-webkit-scrollbar { width: 10px; height: 10px; }
+        ::-webkit-scrollbar-track { background: #f1f5f9; }
+        ::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 5px; }
+        .page-container { box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }
+    </style>
+</head>
+<body class="bg-slate-100 h-screen flex flex-col overflow-hidden">
+
+    <header class="h-16 bg-white border-b border-slate-200 px-6 flex items-center justify-between z-30 shadow-sm shrink-0">
+        <div class="font-bold text-xl text-blue-600 tracking-tight flex items-center gap-1">
+            📄 PDFEditor<span class="text-xs text-indigo-600 font-extrabold bg-indigo-100 px-1 py-0.5 rounded">FIXED</span>
+        </div>
+        
+        <div id="zoom-controls" class="hidden flex items-center bg-slate-100 p-1 rounded-lg border border-slate-200 gap-1">
+            <button onclick="zoomOut()" class="w-8 h-8 flex items-center justify-center hover:bg-white rounded text-slate-600 font-bold">−</button>
+            <span id="zoom-level" class="font-mono text-sm font-semibold text-slate-700 w-16 text-center">100%</span>
+            <button onclick="zoomIn()" class="w-8 h-8 flex items-center justify-center hover:bg-white rounded text-slate-600 font-bold">+</button>
+        </div>
+        
+        <button id="btn-save" onclick="savePDF()" class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 rounded-lg shadow-md font-medium transition active:scale-95 flex items-center gap-2">
+            <span>💾</span> Simpan PDF
+        </button>
+    </header>
+
+    <div class="flex flex-1 overflow-hidden relative">
+        
+        <aside class="w-72 bg-white border-r border-slate-200 p-5 flex flex-col gap-5 z-20 shadow-md overflow-y-auto">
+            <label class="p-6 border-2 border-dashed border-blue-200 rounded-xl bg-blue-50/50 hover:bg-blue-50 cursor-pointer text-center group transition">
+                <span class="block text-3xl mb-2 group-hover:scale-110 transition">📂</span>
+                <span class="block text-blue-600 font-bold text-sm">Upload PDF</span>
+                <input type="file" id="pdf-upload" hidden accept="application/pdf">
+            </label>
+            
+            <div class="space-y-3">
+                <p class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Tools Editor</p>
+                <button onclick="toolText()" class="w-full p-3 text-left hover:bg-slate-50 rounded-lg border border-transparent hover:border-slate-200 flex items-center gap-3 transition">
+                    <span class="bg-yellow-100 text-yellow-700 w-8 h-8 flex items-center justify-center rounded-md text-xs font-bold">Tt</span>
+                    <span class="text-sm font-medium text-slate-700">Tambah Teks</span>
+                </button>
+                <button onclick="toolWhiteout()" class="w-full p-3 text-left hover:bg-slate-50 rounded-lg border border-transparent hover:border-slate-200 flex items-center gap-3 transition">
+                    <span class="bg-red-100 text-red-600 w-8 h-8 flex items-center justify-center rounded-md text-xs font-bold">⬜</span>
+                    <span class="text-sm font-medium text-slate-700">Whiteout</span>
+                </button>
+                <input type="file" id="image-input" hidden accept="image/*" onchange="handleImageSelect(this)">
+                <button onclick="toolImage()" class="w-full p-3 text-left hover:bg-slate-50 rounded-lg border border-transparent hover:border-slate-200 flex items-center gap-3 transition">
+                    <span class="bg-purple-100 text-purple-600 w-8 h-8 flex items-center justify-center rounded-md text-xs font-bold">🖼️</span>
+                    <span class="text-sm font-medium text-slate-700">Insert Gambar</span>
+                </button>
+                <button onclick="toolSign()" class="w-full p-3 text-left hover:bg-slate-50 rounded-lg border border-transparent hover:border-slate-200 flex items-center gap-3 transition">
+                    <span class="bg-green-100 text-green-600 w-8 h-8 flex items-center justify-center rounded-md text-xs font-bold">✍️</span>
+                    <span class="text-sm font-medium text-slate-700">Tanda Tangan</span>
+                </button>
+            </div>
+            <div class="mt-auto pt-4 border-t text-center"><p class="text-xs text-slate-400">Tekan <kbd>Del</kbd> untuk hapus</p></div>
+        </aside>
+
+        <main id="main-scroll" class="flex-1 overflow-auto bg-slate-200/90 p-8 flex justify-center relative">
+            <div id="pages-container" class="flex flex-col gap-8 items-center pb-20 outline-none" tabindex="0"></div>
+        </main>
+    </div>
+
+    <div id="text-toolbar" class="hidden fixed top-0 left-0 bg-white px-4 py-2 rounded-full shadow-2xl border border-slate-200 z-50 flex items-center gap-3 animate-in fade-in zoom-in duration-100">
+        <select id="font-family" onchange="updateTextProp('fontFamily', this.value)" class="text-sm border-r pr-3 outline-none cursor-pointer hover:text-blue-600 bg-transparent">
+            <option value="Helvetica">Helvetica</option>
+            <option value="Times New Roman">Times New Roman</option>
+            <option value="Courier">Courier</option>
+        </select>
+        <div class="flex items-center gap-1 border-r pr-3">
+            <button onclick="changeFontSize(-2)" class="hover:bg-slate-100 w-6 h-6 rounded text-sm font-bold">A-</button>
+            <span id="font-size-val" class="text-xs font-mono w-6 text-center">16</span>
+            <button onclick="changeFontSize(2)" class="hover:bg-slate-100 w-6 h-6 rounded text-sm font-bold">A+</button>
+        </div>
+        <div class="flex items-center gap-1 border-r pr-3">
+            <button onclick="toggleBold()" id="btn-bold" class="w-7 h-7 rounded hover:bg-slate-100 font-bold">B</button>
+            <button onclick="toggleItalic()" id="btn-italic" class="w-7 h-7 rounded hover:bg-slate-100 italic font-serif">I</button>
+            <button onclick="toggleLinethrough()" id="btn-strike" class="w-7 h-7 rounded hover:bg-slate-100 line-through">S</button>
+        </div>
+        <div class="flex items-center gap-2">
+            <input type="color" id="text-color" onchange="updateTextProp('fill', this.value)" class="w-6 h-6 rounded cursor-pointer border-none p-0 bg-transparent">
+        </div>
+    </div>
+
+    <div id="sign-modal" class="fixed inset-0 bg-slate-900/60 hidden flex items-center justify-center z-50 backdrop-blur-sm">
+        <div class="bg-white rounded-xl p-6 w-[520px] max-h-[85vh] flex flex-col shadow-2xl">
+            <div class="flex justify-between items-center mb-5 pb-3 border-b">
+                <h3 class="font-bold text-lg text-slate-800">Pilih Tanda Tangan</h3>
+                <button onclick="closeModal()" class="text-slate-400 hover:text-red-500 font-bold px-2">✕</button>
+            </div>
+            <div id="sign-grid" class="grid grid-cols-3 gap-4 overflow-y-auto p-2 min-h-[200px]"></div>
+        </div>
+    </div>
+
+    <script type="module" src="/js/app.js"></script>
+</body>
+</html>
